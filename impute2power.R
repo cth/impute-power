@@ -1,3 +1,4 @@
+# vim: set tabstop=2 shiftwidth=2 expandtab
 # An allele cause causes and odds ratio increase in the chance that
 # the person carrying the allele is a case.
 # p(case|allele) = odds.ratio * p(control|allele)
@@ -15,24 +16,20 @@
 
 
 
-'++'<-function(a,b,...)  { c(a,b,...)} 
-
 # Rsquared sampling
-sampleRawGenotype <- function(odds.ratio = 1, cases = 100, controls = 100, maf = 0.5) {
+sample.genotypes <- function(odds.ratio = 1, cases = 100, controls = 100, maf = 0.5) {
   # Generate alleles
   num.variant.alleles <- round(maf*2*(cases+controls))
   
-  allele.pool <- c(rep(T,num.variant.alleles), rep(F, (2*(cases+controls))-num.variant.alleles))
+  allele.pool <- sample(c(rep(T,num.variant.alleles), rep(F, (2*(cases+controls))-num.variant.alleles)), 2*(cases+controls))
   stopifnot(length(allele.pool) == 2*(cases+controls))
   # sampling way (not precise!)
   #allele.pool <- runif(2*(cases+controls)) < maf
 
   sample.alleles <- function(scale.factor, cases, controls, maf) {
-    sample_probabilities <- ifelse(allele.pool==F, 1, scale.factor)
-    print(unique(sample_probabilities))
+    sample_probabilities <- ifelse(allele.pool==F, 2, scale.factor)
     # ensure sum(probs) = 1
     sample_probabilities <- sample_probabilities / sum(sample_probabilities)
-    print(unique(sample_probabilities))
     
     which.cases.alleles <- sample(1:length(allele.pool), size=cases*2, replace=FALSE, prob = sample_probabilities)
     which.controls.alleles <- which(!(1:length(allele.pool) %in% which.cases.alleles))
@@ -59,12 +56,7 @@ sampleRawGenotype <- function(odds.ratio = 1, cases = 100, controls = 100, maf =
      
     sample.odds.ratio.diff <- abs(sample.odds.ratio - odds.ratio)
 
-    print(paste("iteration =",iteration, 
-                "sample.odds=",sample.odds.ratio, 
-                "lower=",lower.scale.factor,
-                "upper=", upper.scale.factor,
-                "scale=",scale.factor, 
-                "diff=", sample.odds.ratio.diff))
+    #print(paste("iteration =",iteration,"sample.odds=",sample.odds.ratio, "lower=",lower.scale.factor,"upper=", upper.scale.factor,"scale=",scale.factor, "diff=", sample.odds.ratio.diff))
     
     if (sample.odds.ratio.diff < epsilon)
         break
@@ -106,15 +98,85 @@ sampleRawGenotype <- function(odds.ratio = 1, cases = 100, controls = 100, maf =
   
 }
 
-imputedGenotype <- function(genotype, info) {
-  repeat {
-    dosages <- jitter(geno,amount=0)
-    
-    lm
-  }
+scale.to.dosages <- function(unscaled) {
+  minima <- min(unscaled) 
+  maxima <- max(unscaled)
+  2 * (unscaled + abs(minima)) / (maxima+abs(minima) - (minima+abs(minima)))
 }
 
-normalize.dosages <- function(dosages) 2 * (dosages + abs(min(dosages))) / ((max(dosages)+abs(min(dosages))) - (min(dosages)+abs(min(dosages))))
+# The usual R jitter function adds noise from a uniform distributio
+jitter.dosages <- function (dosages, amount = 0) 
+  scale.to.dosages(dosages + (amount*rnorm(length(dosages))))
+
+
+# Sample dosages from genotypes using fast binary search for r-squared 
+# It will result in  approximately correct r-squared, but have a tendency to "look" to nice..
+sample.dosages <- function(genotypes, info,epsilon=0.01) {
+  jitter.amount = 0
+  dosages <- genotypes
+  
+  repeat {
+    rsq <- summary(lm(genotypes ~ dosages))$r.squared
+    diff <- abs(rsq - info)
+	
+    #print(paste("info=", info,  "rsq=", rsq, "diff=", diff,"jitter.amount=", jitter.amount))
+
+    if(diff < epsilon)
+      break
+    else if (rsq > info)
+      jitter.amount <- jitter.amount + (diff / 2)
+    else
+      jitter.amount <- jitter.amount - (diff / 2)
+
+    dosages <- jitter(genotypes,amount=jitter.amount)
+  }
+  list(
+    # Make sure dosages are normalized to [0-2] interval:
+   dosages = dosages,
+#2 * (dosages + abs(min(dosages))) / ((max(dosages)+abs(min(dosages))) - (min(dosages)+abs(min(dosages)))),
+    r.squared = rsq
+  )
+}
+
+sample.dosages2 <- function(genotypes, info,epsilon=0.01) {
+  dosages <- scale.to.dosages(runif(length(genotypes)))
+  rsq = 0
+  
+  repeat {
+    rsq <- summary(lm(genotypes ~ dosages))$r.squared
+     
+    diff <- abs(rsq - info)
+
+    # pick random "dosages" and update them to be closer to true genotypes
+    # the amount of genotypes to update per iteration is proportional to 
+    # to the level of info 
+    how.many <- sum(runif(length(genotypes)) < info)
+    picked <- sample(1:length(genotypes), how.many)
+    dosages[picked] <- (dosages[picked] + genotypes[picked]) / 2
+
+    print(paste("info=", info,  "rsq=", rsq, "diff=", diff))
+
+    if(diff < epsilon)
+      break
+    if(rsq > info)
+	break
+
+  }
+  list(dosages = dosages,r.squared = rsq)
+}
+
+# Test of sample.dosages2
+test.sample.dosages2 <- function() {
+  r.squared.values <- sapply(1:25, function(x) {
+    info <- runif(1)
+    maf <- runif(1)/2
+    or <- runif(1)*4 
+    snp = sample.genoypes(runif(1)/2, runif(1), runif(1)*2, 100, 100)
+    sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)$r.squared
+  }
+  print(r.squared.values)
+  qqnorm(r.squared.values)
+}
 
 snp.table <- function(sampled.snp)
   with(sampled.snp,
@@ -122,7 +184,39 @@ snp.table <- function(sampled.snp)
       case = c(rep(T,cases), rep(F,controls)),
       genotype = c(genotypes$cases, genotypes$controls)))
 
-
-sampleMarker <- function(odds.ratio = 1, cases = 100, controls = 100, rsquared = 1) {
+dosages.table <- function(snp,info) {
+  dosages <- sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)
+  data.frame(
+    case = c(rep(T,snp$cases), rep(F,snp$controls)),
+    genotype = dosages$dosages)
 }
 
+sample.snp <- function(maf, info, odds.ratio, n_cases, n_controls) {
+  snp <- sample.genotypes(odds.ratio,n_cases,n_controls,maf)
+  dosages <- sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)
+  print(dosages$r.squared)
+  d <- data.frame(
+    case = c(rep(T,snp$cases), rep(F,snp$controls)),
+    genotype = c(snp$genotypes$cases, snp$genotypes$controls),
+    dosage = dosages$dosages)
+}
+
+test.table <- function(d) {
+  fit<-glm(case ~ dosage, data=d, family=binomial()) 
+  test<-wald.test(b = coef(fit), Sigma=vcov(fit), Terms=1)
+  print(test)
+  test$result$chi2[3]
+}
+
+#test.imputed.snp <- function(maf, info, odds.ratio, n_cases, n_controls) {
+#  genotypes <- sample.genotypes(odds.ratio,n_cases,n_controls,maf)
+#  dosages <- sample.dosages(c(snp$genotypes$cases, snp$genotypes$controls),info)
+#  print(dosages$r.squared)
+#  d <- data.frame(
+#    case = c(rep(T,snp$cases), rep(F,snp$controls)),
+#    genotype = c(genotypes$cases, genotypes$controls),
+#    dosage = dosages$dosages) #  #d <- dosages.table(genotypes,info)
+#  #print(d)
+#  fit<-glm(case ~ dosage, data=d, family=binomial()) 
+#  wald.test(b = coef(fit), Sigma=vcov(fit), Terms=1)$result$chi2[3]
+#} 
