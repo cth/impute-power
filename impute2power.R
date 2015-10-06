@@ -106,6 +106,16 @@ sampleRawGenotype <- function(odds.ratio = 1, cases = 100, controls = 100, maf =
   
 }
 
+imputedGenotype <- function(genotype, info) {
+  repeat {
+    dosages <- jitter(geno,amount=0)
+    
+    lm
+  }
+}
+
+normalize.dosages <- function(dosages) 2 * (dosages + abs(min(dosages))) / ((max(dosages)+abs(min(dosages))) - (min(dosages)+abs(min(dosages))))
+
 snp.table <- function(sampled.snp)
   with(sampled.snp,
     data.frame(
