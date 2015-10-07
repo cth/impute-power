@@ -220,13 +220,51 @@ calculate.power <- function(imputed, n_cases, n_controls, odds.ratio, max.maf=0.
   p.values <- sapply(1:nrow(imputed), function(i) {
     snp = sample.snp(imputed[i,maf.idx], imputed[i,info.idx], odds.ratio, n_cases, n_controls)
 #    print(snp)
-    test.table(snp)
+    test.snp(snp)
   })
   
   # Return the proportion of signifant tests
   sum(p.adjust(p.values) < significance) / length(p.values)
 }
 
+
+impute2.pwr <- function(info.files, ...) {
+	info.file.names <- Sys.glob(info.files)
+
+	# We record the frequency of observed info+maf imputations
+	counts <- table(factor(levels=1:100/100), factor(levels=1:50/100)) 
+
+	for(file in info.file.names) {
+		print(paste("processing file:", file))
+		info <- read.table(file,h=T)
+		counts <- counts + table(
+			factor(round(info$info,digits=2), levels=1:100/100),
+			factor(round(ifelse(info$exp_freq_a1 > 0.5, 1-info$exp_freq_a1,info$exp_freq_a1),digits=2), levels=1:50/100))
+	}
+	frequencies <- counts / 5000 
+
+
+	# This function samples  (maf,info) pairs with probability proportional
+	# to observing that maf+info pair in the imputed data
+	sample.info.maf <- function() {
+		index <- sample(1:5000, 1,prob=frequencies)
+		info_pct   <- ifelse(index %% 100 == 0, 100, index %% 100) # This would be so much simpler with 0-based indexing..
+		maf_pct  <- (index %/% 100) + 1
+		if (maf_pct == 51) maf_pct <- 50
+		#print(paste("index=", index, "maf=", maf_pct, "info=", info_pct))
+		#print(paste("counts=", counts[info_pct,maf_pct]))
+		list(maf=maf_pct/100, info=info_pct/100)
+	}
+
+	iterations <- 0
+	repeat {
+		sample.info.maf()
+		iterations <- iterations + 1
+		if (iterations > 1000)
+			break
+	}
+	counts
+}
 
 tst.calc.pwr <- function() {
   tests = 250
