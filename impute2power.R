@@ -1,3 +1,5 @@
+library("aod")
+
 # vim: set tabstop=2 shiftwidth=2 expandtab
 # An allele cause causes and odds ratio increase in the chance that
 # the person carrying the allele is a case.
@@ -144,8 +146,13 @@ sample.dosages2 <- function(genotypes, info,epsilon=0.01) {
   
   repeat {
     rsq <- summary(lm(genotypes ~ dosages))$r.squared
-     
-    diff <- abs(rsq - info)
+     diff <- abs(rsq - info)
+    
+    if(diff < epsilon)
+      break
+    if(rsq > info+epsilon)
+      break
+    
 
     # pick random "dosages" and update them to be closer to true genotypes
     # the amount of genotypes to update per iteration is proportional to 
@@ -156,25 +163,22 @@ sample.dosages2 <- function(genotypes, info,epsilon=0.01) {
 
     print(paste("info=", info,  "rsq=", rsq, "diff=", diff))
 
-    if(diff < epsilon)
-      break
-    if(rsq > info)
-	break
-
   }
   list(dosages = dosages,r.squared = rsq)
 }
 
 # Test of sample.dosages2
 test.sample.dosages2 <- function() {
-  r.squared.values <- sapply(1:25, function(x) {
+  r.squared.values <- sapply(1:250, function(x) {
     info <- runif(1)
     maf <- runif(1)/2
-    or <- runif(1)*4 
-    snp = sample.genoypes(runif(1)/2, runif(1), runif(1)*2, 100, 100)
-    sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)$r.squared
-  }
+    or <- runif(1)*4
+    print(paste('or=',or,"maf=",maf))
+    snp = sample.genotypes(or, 100, 100, maf)
+    (info - sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)$r.squared)
+  })
   print(r.squared.values)
+  hist(r.squared.values,breaks=20)
   qqnorm(r.squared.values)
 }
 
@@ -201,22 +205,41 @@ sample.snp <- function(maf, info, odds.ratio, n_cases, n_controls) {
     dosage = dosages$dosages)
 }
 
-test.table <- function(d) {
+test.snp <- function(d) {
   fit<-glm(case ~ dosage, data=d, family=binomial()) 
   test<-wald.test(b = coef(fit), Sigma=vcov(fit), Terms=1)
-  print(test)
   test$result$chi2[3]
 }
 
-#test.imputed.snp <- function(maf, info, odds.ratio, n_cases, n_controls) {
-#  genotypes <- sample.genotypes(odds.ratio,n_cases,n_controls,maf)
-#  dosages <- sample.dosages(c(snp$genotypes$cases, snp$genotypes$controls),info)
-#  print(dosages$r.squared)
-#  d <- data.frame(
-#    case = c(rep(T,snp$cases), rep(F,snp$controls)),
-#    genotype = c(genotypes$cases, genotypes$controls),
-#    dosage = dosages$dosages) #  #d <- dosages.table(genotypes,info)
-#  #print(d)
-#  fit<-glm(case ~ dosage, data=d, family=binomial()) 
-#  wald.test(b = coef(fit), Sigma=vcov(fit), Terms=1)$result$chi2[3]
-#} 
+
+# Takes a dataframe with columns 'info' and 'maf'
+calculate.power <- function(imputed, n_cases, n_controls, odds.ratio, max.maf=0.5, max.info=1, significance=0.05, multiple.test.adjust="bonferoni") {
+  maf.idx = which(colnames(imputed)=="maf")
+  info.idx = which(colnames(imputed)=="info")
+  
+  p.values <- sapply(1:nrow(imputed), function(i) {
+    snp = sample.snp(imputed[i,maf.idx], imputed[i,info.idx], odds.ratio, n_cases, n_controls)
+#    print(snp)
+    test.table(snp)
+  })
+  
+  # Return the proportion of signifant tests
+  sum(p.adjust(p.values) < significance) / length(p.values)
+}
+
+
+tst.calc.pwr <- function() {
+  tests = 250
+  
+  # Let's asssume the LuCamp scenario of 1000/1000 cases/controls
+  n_cases = 1000
+  n_controls = 1000
+  
+  proposed.maf <- runif(tests)/2
+  imputed.values <- data.frame(
+    maf = ifelse(proposed.maf >= 0.01, proposed.maf, 0.01),
+    info = runif(tests)
+  )
+  
+  calculate.power(imputed.values,n_cases, n_controls, 1.35)
+}
