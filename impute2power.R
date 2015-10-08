@@ -41,7 +41,7 @@ sample.genotypes <- function(odds.ratio = 1, cases = 100, controls = 100, maf = 
       controls = allele.pool[which.controls.alleles]
     )
   }
-  
+
   lower.scale.factor = 0
   upper.scale.factor = odds.ratio * 2
   scale.factor = odds.ratio
@@ -197,7 +197,7 @@ dosages.table <- function(snp,info) {
 
 sample.snp <- function(maf, info, odds.ratio, n_cases, n_controls) {
   snp <- sample.genotypes(odds.ratio,n_cases,n_controls,maf)
-  dosages <- sample.dosages2(c(snp$genotypes$cases, snp$genotypes$controls),info)
+  dosages <- sample.dosages(c(snp$genotypes$cases, snp$genotypes$controls),info)
   print(dosages$r.squared)
   d <- data.frame(
     case = c(rep(T,snp$cases), rep(F,snp$controls)),
@@ -213,13 +213,18 @@ test.snp <- function(d) {
 
 
 # Takes a dataframe with columns 'info' and 'maf'
-calculate.power <- function(imputed, n_cases, n_controls, odds.ratio, max.maf=0.5, max.info=1, significance=0.05, multiple.test.adjust="bonferoni") {
+calculate.power <- function(imputed, n_cases, n_controls, odds.ratio, max.maf=0.5, max.info=1, number.of.tests=NA, significance=0.05, multiple.test.adjust="bonferoni") {
+  
+  if (is.na(number.of.tests)) {
+    cat("Assumming number.of.tests = nrow(imputed): ")
+    cat("Note that multiple test correction will be inaccurate if nrow(imputed) is different from actual number imputed markers.")
+  }
+  
   maf.idx = which(colnames(imputed)=="maf")
   info.idx = which(colnames(imputed)=="info")
   
   p.values <- sapply(1:nrow(imputed), function(i) {
     snp = sample.snp(imputed[i,maf.idx], imputed[i,info.idx], odds.ratio, n_cases, n_controls)
-#    print(snp)
     test.snp(snp)
   })
   
@@ -227,51 +232,51 @@ calculate.power <- function(imputed, n_cases, n_controls, odds.ratio, max.maf=0.
   sum(p.adjust(p.values) < significance) / length(p.values)
 }
 
+# sample a data.frame of imputation qualities - (maf,info) pairs for used in power calculations
+# This function samples  (maf,info) pairs with probability proportional to observing that 
+# maf+info pair in the imputed data
+sample.info.maf <- function(info.files, sampling.iterations) {
+  info.file.names <- Sys.glob(info.files)
+  
+  # We record the frequency of observed info+maf imputations
+  counts <- table(factor(levels=1:100/100), factor(levels=1:50/100)) 
+  for(file in info.file.names) {
+    print(paste("processing file:", file))
+    info <- read.table(file,h=T)
+    counts <- counts + table(
+      factor(round(info$info,digits=2), levels=1:100/100),
+      factor(round(ifelse(info$exp_freq_a1 > 0.5, 1-info$exp_freq_a1,info$exp_freq_a1),digits=2), levels=1:50/100))
+  }
+  frequencies <- counts / 5000
+  
+  sampled.imputation.quals <- data.frame(maf = rep(NA,sampling.iterations), info = rep(NA,sampling.iterations))
+  iteration <- 0
 
-impute2.pwr <- function(info.files, ...) {
-	info.file.names <- Sys.glob(info.files)
+  
+  repeat {
+    iteration <- iteration + 1
+    if (iteration > sampling.iterations)
+      break
+    index <- sample(1:5000, 1,prob=frequencies)
+    info_pct   <- ifelse(index %% 100 == 0, 100, index %% 100) # This would be so much simpler with 0-based indexing..
+    maf_pct  <- (index %/% 100) + 1
+    if (maf_pct == 51) maf_pct <- 50
+    sampled.imputation.quals[iteration,] <- c(maf_pct/100, info_pct/100)
+  }
+  sampled.imputation.quals
+}
 
-	# We record the frequency of observed info+maf imputations
-	counts <- table(factor(levels=1:100/100), factor(levels=1:50/100)) 
-
-	for(file in info.file.names) {
-		print(paste("processing file:", file))
-		info <- read.table(file,h=T)
-		counts <- counts + table(
-			factor(round(info$info,digits=2), levels=1:100/100),
-			factor(round(ifelse(info$exp_freq_a1 > 0.5, 1-info$exp_freq_a1,info$exp_freq_a1),digits=2), levels=1:50/100))
-	}
-	frequencies <- counts / 5000 
-
-
-	# This function samples  (maf,info) pairs with probability proportional
-	# to observing that maf+info pair in the imputed data
-	sample.info.maf <- function() {
-		index <- sample(1:5000, 1,prob=frequencies)
-		info_pct   <- ifelse(index %% 100 == 0, 100, index %% 100) # This would be so much simpler with 0-based indexing..
-		maf_pct  <- (index %/% 100) + 1
-		if (maf_pct == 51) maf_pct <- 50
-		#print(paste("index=", index, "maf=", maf_pct, "info=", info_pct))
-		#print(paste("counts=", counts[info_pct,maf_pct]))
-		list(maf=maf_pct/100, info=info_pct/100)
-	}
-
-	iterations <- 0
-	repeat {
-		sample.info.maf()
-		iterations <- iterations + 1
-		if (iterations > 1000)
-			break
-	}
-	counts
+impute2.pwr <- function(info.files, sampling.iterations, ...) {
+  calculate.power(sampled.imputation.quals,...)
 }
 
 tst.calc.pwr <- function() {
   tests = 250
-  
+  cal
   # Let's asssume the LuCamp scenario of 1000/1000 cases/controls
   n_cases = 1000
   n_controls = 1000
+  
   
   proposed.maf <- runif(tests)/2
   imputed.values <- data.frame(
@@ -280,4 +285,17 @@ tst.calc.pwr <- function() {
   )
   
   calculate.power(imputed.values,n_cases, n_controls, 1.35)
+}
+
+tst.calc.pwr2 <- function() {
+  # Let's asssume the LuCamp scenario of 1000/1000 cases/controls
+  n_cases = 1000
+  n_controls = 1000
+  imputed.table <- sample.info.maf(info.files="info-files/chr21.info", sampling.iterations = 100)
+  powers <- sapply(seq(1,2,0.1), function(or) calculate.power(imputed.table,n_cases, n_controls, or))
+  plot(seq(1,2,0.1), powers)
+}
+
+testit <- function() {
+  tst.calc.pwr()
 }
